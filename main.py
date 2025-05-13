@@ -1,10 +1,12 @@
 import logging
 import openai
 import os
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, executor, types
 from dotenv import load_dotenv
 import urllib.parse
-import asyncio
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
 
 # Завантаження змінних середовища
 load_dotenv()
@@ -16,6 +18,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher(bot)
 openai.api_key = OPENAI_API_KEY
+
+# Підключення до Google Sheets
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", scope)
+client = gspread.authorize(creds)
+sheet = client.open("LoyaltyBotLog").sheet1
 
 user_data = {}
 
@@ -39,42 +47,26 @@ async def start_handler(message: types.Message):
 
 @dp.message_handler(lambda m: m.text in ["Cozy", "Modern", "Classic"])
 async def handle_style(message: types.Message):
-    if message.from_user.id not in user_data:
-        await message.answer("⚠️ Спочатку надішли /start.")
-        return
     user_data[message.from_user.id]["style"] = message.text
     await message.answer(f"Питання 2/5: {questions[1]}", reply_markup=price_kb)
 
 @dp.message_handler(lambda m: m.text in ["Economy", "Midscale", "Upscale", "Upper Upscale", "Luxury"])
 async def handle_price(message: types.Message):
-    if message.from_user.id not in user_data:
-        await message.answer("⚠️ Спочатку надішли /start.")
-        return
     user_data[message.from_user.id]["price"] = message.text
     await message.answer(f"Питання 3/5: {questions[2]}", reply_markup=quantity_kb)
 
 @dp.message_handler(lambda m: m.text in ["High", "Medium", "Low"])
 async def handle_quantity(message: types.Message):
-    if message.from_user.id not in user_data:
-        await message.answer("⚠️ Спочатку надішли /start.")
-        return
     user_data[message.from_user.id]["quantity"] = message.text
     await message.answer(f"Питання 4/5: {questions[3]}", reply_markup=types.ReplyKeyboardRemove())
 
 @dp.message_handler(lambda m: "preferences" not in user_data.get(m.from_user.id, {}))
 async def handle_preferences(message: types.Message):
-    if message.from_user.id not in user_data:
-        await message.answer("⚠️ Спочатку надішли /start.")
-        return
     user_data[message.from_user.id]["preferences"] = message.text
     await message.answer(f"Питання 5/5: {questions[4]}")
 
 @dp.message_handler(lambda m: "destination" not in user_data.get(m.from_user.id, {}))
 async def handle_destination(message: types.Message):
-    if message.from_user.id not in user_data:
-        await message.answer("⚠️ Спочатку надішли /start.")
-        return
-
     user_data[message.from_user.id]["destination"] = message.text
     data = user_data[message.from_user.id]
 
@@ -94,17 +86,14 @@ async def handle_destination(message: types.Message):
 6. Якщо можливо, додай цікаву або романтичну деталь, пов'язану з готелем або місцем.
 """
 
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.8,
-            max_tokens=800
-        )
-        reply = response.choices[0].message.content
-    except Exception as e:
-        await message.answer(f"🚫 Помилка під час звернення до OpenAI: {e}")
-        return
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.8,
+        max_tokens=800
+    )
+
+    reply = response.choices[0].message.content
 
     hotel_lines = [line for line in reply.split('\n') if line.strip().startswith("4.")]
     hotel_name = hotel_lines[0][2:].strip() if hotel_lines else data["destination"]
@@ -113,11 +102,23 @@ async def handle_destination(message: types.Message):
 
     await message.answer(f"📌 Ось що я рекомендую:\n{reply}\n\n📍 Переглянь на Google Maps: {google_maps_url}")
 
+    # Логування до Google Sheets з відміткою часу
+    try:
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        sheet.append_row([
+            timestamp,
+            str(message.from_user.id),
+            data.get("style", ""),
+            data.get("price", ""),
+            data.get("quantity", ""),
+            data.get("preferences", ""),
+            data.get("destination", ""),
+            hotel_name,
+            reply
+        ])
+    except Exception as e:
+        print(f"❌ Не вдалося зберегти у таблицю: {e}")
+
 if __name__ == '__main__':
-    async def main():
-        print("🤖 Бот запущено.")
-        await bot.delete_webhook(drop_pending_updates=True)
-        await dp.start_polling()
-
-    asyncio.run(main())
-
+    print("🤖 Бот запущено.")
+    executor.start_polling(dp)
