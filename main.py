@@ -1,9 +1,10 @@
 import logging
 import openai
 import os
-from aiogram import Bot, Dispatcher, executor, types
+from aiogram import Bot, Dispatcher, types
 from dotenv import load_dotenv
 import urllib.parse
+import asyncio
 
 # Завантаження змінних середовища
 load_dotenv()
@@ -38,26 +39,42 @@ async def start_handler(message: types.Message):
 
 @dp.message_handler(lambda m: m.text in ["Cozy", "Modern", "Classic"])
 async def handle_style(message: types.Message):
+    if message.from_user.id not in user_data:
+        await message.answer("⚠️ Спочатку надішли /start.")
+        return
     user_data[message.from_user.id]["style"] = message.text
     await message.answer(f"Питання 2/5: {questions[1]}", reply_markup=price_kb)
 
 @dp.message_handler(lambda m: m.text in ["Economy", "Midscale", "Upscale", "Upper Upscale", "Luxury"])
 async def handle_price(message: types.Message):
+    if message.from_user.id not in user_data:
+        await message.answer("⚠️ Спочатку надішли /start.")
+        return
     user_data[message.from_user.id]["price"] = message.text
     await message.answer(f"Питання 3/5: {questions[2]}", reply_markup=quantity_kb)
 
 @dp.message_handler(lambda m: m.text in ["High", "Medium", "Low"])
 async def handle_quantity(message: types.Message):
+    if message.from_user.id not in user_data:
+        await message.answer("⚠️ Спочатку надішли /start.")
+        return
     user_data[message.from_user.id]["quantity"] = message.text
     await message.answer(f"Питання 4/5: {questions[3]}", reply_markup=types.ReplyKeyboardRemove())
 
 @dp.message_handler(lambda m: "preferences" not in user_data.get(m.from_user.id, {}))
 async def handle_preferences(message: types.Message):
+    if message.from_user.id not in user_data:
+        await message.answer("⚠️ Спочатку надішли /start.")
+        return
     user_data[message.from_user.id]["preferences"] = message.text
     await message.answer(f"Питання 5/5: {questions[4]}")
 
 @dp.message_handler(lambda m: "destination" not in user_data.get(m.from_user.id, {}))
 async def handle_destination(message: types.Message):
+    if message.from_user.id not in user_data:
+        await message.answer("⚠️ Спочатку надішли /start.")
+        return
+
     user_data[message.from_user.id]["destination"] = message.text
     data = user_data[message.from_user.id]
 
@@ -77,14 +94,17 @@ async def handle_destination(message: types.Message):
 6. Якщо можливо, додай цікаву або романтичну деталь, пов'язану з готелем або місцем.
 """
 
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.8,
-        max_tokens=800
-    )
-
-    reply = response.choices[0].message.content
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.8,
+            max_tokens=800
+        )
+        reply = response.choices[0].message.content
+    except Exception as e:
+        await message.answer(f"🚫 Помилка під час звернення до OpenAI: {e}")
+        return
 
     hotel_lines = [line for line in reply.split('\n') if line.strip().startswith("4.")]
     hotel_name = hotel_lines[0][2:].strip() if hotel_lines else data["destination"]
@@ -94,5 +114,10 @@ async def handle_destination(message: types.Message):
     await message.answer(f"📌 Ось що я рекомендую:\n{reply}\n\n📍 Переглянь на Google Maps: {google_maps_url}")
 
 if __name__ == '__main__':
-    print("🤖 Бот запущено.")
-    executor.start_polling(dp)
+    async def main():
+        print("🤖 Бот запущено.")
+        await bot.delete_webhook(drop_pending_updates=True)
+        await dp.start_polling()
+
+    asyncio.run(main())
+
